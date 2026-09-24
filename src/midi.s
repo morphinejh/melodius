@@ -1809,8 +1809,38 @@ drum:
 .endproc
 
 .proc do_event_sysex: near
-    ; stub, skips over it
-    jsr get_variable_length ; length
+    jsr get_variable_length ; length -> variable_length
+
+    ; SYSEX isn't scoped to a channel, forward it only if at least
+    ; one MIDI channel is currently routed
+    ldx #0
+chkloop:
+    lda midichannels + MIDIChannel::ext_enable,x
+    bne forward_sysex
+    inx
+    cpx #MIDI_CHANNELS
+    bcc chkloop
+
+    ; Nothing routed externally -- just skip over it
+    lda variable_length
+    sta chunklen
+    lda variable_length+1
+    sta chunklen+1
+    lda variable_length+2
+    sta chunklen+2
+    lda variable_length+3
+    sta chunklen+3
+
+	; Use RTS in advance_to_end_of_chunk to return
+    jmp advance_to_end_of_chunk
+
+forward_sysex:
+    ; send the F0/F7 that introduced this message, then the payload,
+    ; verbatim and in one go -- a sysex message is sent as a single
+    ; atomic burst, same as any real sequencer/hardware treats it
+    ldx track_iter
+    lda miditracks + MIDITrack::prevstatus,x
+    jsr serial_send_byte
 
     lda variable_length
     sta chunklen
@@ -1821,7 +1851,16 @@ drum:
     lda variable_length+3
     sta chunklen+3
 
-    jsr advance_to_end_of_chunk
+payloadloop:
+    lda chunklen
+    ora chunklen+1
+    ora chunklen+2
+    ora chunklen+3
+    beq end
+    jsr fetch_indirect_byte_decchunk
+    jsr serial_send_byte
+    bra payloadloop
+end:
     rts
 .endproc
 
